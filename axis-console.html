@@ -422,9 +422,21 @@ async function transcribeWithScribe(blob){
   return (data.text || '').trim();
 }
 
-function startScribeRecording(){
+// Reused across every hold instead of re-requesting getUserMedia each time —
+// re-initializing the mic hardware on every press produced a brief cold-start
+// click at the very start of the audio, which Scribe was hallucinating into
+// a repeated first word. Keeping one live stream open avoids that entirely.
+function ensureMediaStream(){
+  const hasLiveAudio = mediaStream && mediaStream.active && mediaStream.getAudioTracks().some(t => t.readyState === 'live');
+  if(hasLiveAudio) return Promise.resolve(mediaStream);
   return navigator.mediaDevices.getUserMedia({ audio: true }).then((stream)=>{
     mediaStream = stream;
+    return stream;
+  });
+}
+
+function startScribeRecording(){
+  return ensureMediaStream().then((stream)=>{
     const mimeType = (window.MediaRecorder && MediaRecorder.isTypeSupported('audio/webm')) ? 'audio/webm' : '';
     mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
     recordedChunks = [];
@@ -532,7 +544,8 @@ async function endListening(){
     els.micBtn.disabled = true;
     try{
       const blob = await stopScribeRecording();
-      stopMediaStream();
+      // deliberately not stopping mediaStream here — it stays live and warm
+      // for the next hold, which is what avoids the cold-start click
       if(blob && blob.size > 500){
         const text = await transcribeWithScribe(blob);
         if(text){
